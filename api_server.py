@@ -761,8 +761,8 @@ if __name__ == "__main__":
     log.info("Starting FastAPI server...")
     uvicorn.run(
         "api_server:app",
-        host="0.0.0.0",
-        port=8000,
+        host=os.environ.get("HOST") or _api_config.get("host", "0.0.0.0"),
+        port=int(os.environ.get("PORT") or _api_config.get("port", 8000)),
         reload=True,
         log_level="info"
     )
