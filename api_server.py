@@ -67,7 +67,10 @@ async def lifespan(app: FastAPI):
         log_file=_config.get("log_file", "scraper.log"),
     )
     log.info("Starting Google Reviews Scraper API Server")
-    job_manager = JobManager(max_concurrent_jobs=3)
+    # JobManager(max_concurrent_jobs=3) in lifespan. 
+    # Three concurrent jobs means up to three Chrome 
+    # trees at once — around 2 GB on their own. Set that to 1.
+    job_manager = JobManager(max_concurrent_jobs=1)
 
     db_path = _config.get("db_path", "reviews.db")
 
