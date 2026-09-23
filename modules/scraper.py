@@ -29,6 +29,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, MofNCompleteColumn
 
+from modules.card_extract import extract_batch
 from modules.date_filter import DateFilter, EARLY_STOP_CONSECUTIVE
 from modules.models import RawReview
 from modules.pipeline import PostScrapeRunner
@@ -38,6 +39,23 @@ from modules.selector_health import SelectorHealth
 
 # Logger
 log = logging.getLogger("scraper")
+
+# Extra Chrome flags, passed to every Driver() call via chromium_arg.
+#   --disable-3d-apis              Maps' WebGL map otherwise renders in
+#                                  software (SwiftShader) inside the
+#                                  renderer: heavy CPU + memory, no value
+#                                  for scraping the reviews pane.
+#   --blink-settings=imagesEnabled=false
+#                                  Don't fetch/paint avatars and review
+#                                  photos. Their URLs stay in the DOM, so
+#                                  image_handler still downloads them.
+CHROME_ARGS = "--disable-3d-apis,--blink-settings=imagesEnabled=false"
+
+# How many already-scraped cards to leave in the DOM after each iteration
+# (config key: dom_prune_keep; 0 disables pruning). Pruning keeps the
+# review list — and therefore the renderer's memory and per-scroll layout
+# cost — flat instead of growing with the review count.
+DOM_PRUNE_KEEP_DEFAULT = 30
 
 # CSS Selectors
 PANE_SEL = 'div[role="main"] div.m6QErb.DxyBCb.kA9KIf.dS8AEf'
@@ -308,7 +326,8 @@ class GoogleReviewsScraper:
                         uc=True,
                         headless=headless,
                         binary_location=chrome_binary,
-                        page_load_strategy="normal"
+                        page_load_strategy="normal",
+                        chromium_arg=CHROME_ARGS
                     )
                     log.info("Successfully created SeleniumBase UC driver with custom binary")
                 except Exception as e:
@@ -317,14 +336,16 @@ class GoogleReviewsScraper:
                     driver = Driver(
                         uc=True,
                         headless=headless,
-                        page_load_strategy="normal"
+                        page_load_strategy="normal",
+                        chromium_arg=CHROME_ARGS
                     )
                     log.info("Successfully created SeleniumBase UC driver with defaults")
             else:
                 driver = Driver(
                     uc=True,
                     headless=headless,
-                    page_load_strategy="normal"
+                    page_load_strategy="normal",
+                    chromium_arg=CHROME_ARGS
                 )
                 log.info("Successfully created SeleniumBase UC driver")
         else:
@@ -335,6 +356,7 @@ class GoogleReviewsScraper:
                     uc=True,
                     headless=headless,
                     page_load_strategy="normal",
+                    chromium_arg=CHROME_ARGS,
                     incognito=True  # Use incognito mode for better stealth
                 )
                 log.info("Successfully created SeleniumBase UC driver")
@@ -1455,6 +1477,7 @@ class GoogleReviewsScraper:
         max_reviews = self.config.get("max_reviews", 0)
         max_scroll_attempts = self.config.get("max_scroll_attempts", 50)
         scroll_idle_limit = self.config.get("scroll_idle_limit", 15)
+        dom_prune_keep = int(self.config.get("dom_prune_keep", DOM_PRUNE_KEEP_DEFAULT))
 
         # Date filter — early_stop mode requires sort_by=newest (enforced later).
         date_filter = DateFilter(self.config)
@@ -1627,11 +1650,19 @@ class GoogleReviewsScraper:
                     pass
 
                 try:
-                    cards = pane.find_elements(By.CSS_SELECTOR, CARD_SEL)
-                    fresh_cards: List[WebElement] = []
+                    # One in-page pass: expand "More", read every not-yet-
+                    # scraped card into a dict, prune old cards from the DOM.
+                    # Two execute_script calls total, regardless of how many
+                    # cards the page holds (was: 1 + N + ~30*fresh calls).
+                    dom_cards, pruned, extracted = extract_batch(
+                        driver, pane, keep_last=dom_prune_keep,
+                    )
+                    if pruned:
+                        log.debug("Pruned %d scraped cards from DOM", pruned)
+                    fresh_cards: List[Dict[str, Any]] = []
 
                     # Check for valid cards
-                    if len(cards) == 0:
+                    if dom_cards == 0:
                         consecutive_no_cards += 1
                         log.info(f"No review cards found in this iteration (consecutive: {consecutive_no_cards})")
 
@@ -1651,30 +1682,22 @@ class GoogleReviewsScraper:
                         consecutive_no_cards = 0  # Reset counter when we find cards
 
                     batch_seen_count = 0  # Cards already in DB (for batch stop)
-                    for c in cards:
-                        try:
-                            cid = c.get_attribute("data-review-id")
-                            if not cid or cid in processed_ids:
-                                continue
-                            processed_ids.add(cid)
-                            if cid in seen:
-                                batch_seen_count += 1
-                                continue
-                            fresh_cards.append(c)
-                        except StaleElementReferenceException:
+                    for c in extracted:
+                        cid = c.get("id")
+                        if not cid or cid in processed_ids:
                             continue
-                        except Exception as e:
-                            log.debug(f"Error getting review ID: {e}")
+                        processed_ids.add(cid)
+                        if cid in seen:
+                            batch_seen_count += 1
                             continue
+                        fresh_cards.append(c)
 
                     batch_total = len(fresh_cards) + batch_seen_count
                     batch_unchanged = batch_seen_count
 
                     for card in fresh_cards:
                         try:
-                            raw = RawReview.from_card(card)
-                        except StaleElementReferenceException:
-                            continue
+                            raw = RawReview.from_dict(card)
                         except Exception:
                             # Skip the card — do not store empty stubs.
                             # Earlier behavior stored a zero-rating placeholder,

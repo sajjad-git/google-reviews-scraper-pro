@@ -176,32 +176,102 @@ class RawReview:
         )
 
     @classmethod
+    def from_dict(cls, d: dict) -> "RawReview":
+        """
+        Build a RawReview from the plain object returned by the in-page
+        extractor (modules/card_extract.py). Same parsing rules as
+        from_card(); only the DOM access has moved into the browser.
+        """
+        rid = (d.get("id") or "").strip()
+
+        rating = 0.0
+        for label in d.get("rating_labels") or []:
+            if not label:
+                continue
+            num = re.search(r"[\d\.]+", label.replace(",", "."))
+            if not num:
+                continue
+            try:
+                rating = float(num.group())
+                if 0 < rating <= 5:
+                    break
+            except ValueError:
+                continue
+
+        date = (d.get("date") or "").strip()
+        review_date = parse_date_to_iso(date)
+
+        text = (d.get("text") or "").strip()
+        lang = detect_lang(text)
+
+        likes = safe_int(d.get("likes_text") or "")
+
+        photos: list[str] = []
+        for style in d.get("photo_styles") or []:
+            m = re.search(r'url\(["\']?([^"\')]+)', style or "")
+            if m:
+                url = m.group(1)
+                if url not in photos:
+                    photos.append(url)
+
+        sub_ratings = cls._parse_sub_rating_labels(d.get("sub_rating_labels") or [])
+
+        return cls(
+            id=rid,
+            author=(d.get("author") or "").strip(),
+            rating=rating,
+            date=date,
+            lang=lang,
+            text=text,
+            likes=likes,
+            photos=photos,
+            profile=d.get("profile") or "",
+            avatar=d.get("avatar") or "",
+            owner_date=(d.get("owner_date") or "").strip(),
+            owner_text=(d.get("owner_text") or "").strip(),
+            review_date=review_date,
+            sub_ratings=sub_ratings,
+        )
+
+    @classmethod
+    def _parse_sub_rating_labels(cls, labels) -> dict:
+        """Parse 'Service 5/5'-style labels into {category: score}."""
+        result: dict = {}
+        for label in labels:
+            try:
+                label = (label or "").strip()
+                if not label:
+                    continue
+                m = re.match(r"(.+?)[:\s]+(\d)\s*/\s*5", label)
+                if not m:
+                    continue
+                raw_cat = m.group(1).strip(" :.").lower()
+                score = int(m.group(2))
+                if score < 0 or score > 5:
+                    continue
+                canonical = canonicalize_category(raw_cat)
+                if canonical:
+                    result[canonical] = score
+                else:
+                    result.setdefault("_other", {})[raw_cat] = score
+            except (ValueError, AttributeError):
+                continue
+        return result
+
+    @classmethod
     def _extract_sub_ratings(cls, card: WebElement) -> dict:
         """Extract per-category sub-ratings (e.g. Service 5/5, Food 4/5)."""
-        result: dict = {}
         for sel in cls.SUB_RATING_SELECTORS:
             blocks = try_find(card, sel, all=True)
             if not blocks:
                 continue
+            labels = []
             for block in blocks:
                 try:
-                    label = (block.get_attribute("aria-label") or block.text or "").strip()
-                    if not label:
-                        continue
-                    m = re.match(r"(.+?)[:\s]+(\d)\s*/\s*5", label)
-                    if not m:
-                        continue
-                    raw_cat = m.group(1).strip(" :.").lower()
-                    score = int(m.group(2))
-                    if score < 0 or score > 5:
-                        continue
-                    canonical = canonicalize_category(raw_cat)
-                    if canonical:
-                        result[canonical] = score
-                    else:
-                        result.setdefault("_other", {})[raw_cat] = score
-                except (ValueError, AttributeError):
+                    labels.append(block.get_attribute("aria-label") or block.text or "")
+                except AttributeError:
                     continue
+            result = cls._parse_sub_rating_labels(labels)
             if result:
-                break
-        return result
+                return result
+        return {}
