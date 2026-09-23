@@ -267,6 +267,11 @@ class GoogleReviewsScraper:
         self._selector_health: SelectorHealth | None = None
         self.place_id = None
         self.total_reviews = None
+        # Live progress: distinct review cards seen so far in the current
+        # scrape. Read by JobManager while the job runs so clients can tell
+        # a working scrape from a stalled one (total_reviews is only set at
+        # the end).
+        self.cards_seen = 0
 
     def _record_selector(self, selector: str, outcome: str) -> None:
         """Telemetry helper — always safe to call."""
@@ -1691,6 +1696,8 @@ class GoogleReviewsScraper:
                             batch_seen_count += 1
                             continue
                         fresh_cards.append(c)
+
+                    self.cards_seen = len(processed_ids)
 
                     batch_total = len(fresh_cards) + batch_seen_count
                     batch_unchanged = batch_seen_count

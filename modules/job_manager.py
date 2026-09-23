@@ -46,6 +46,11 @@ class ScrapingJob:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert job to dictionary for JSON serialization"""
+        # While the scraper is running, surface its live card count so
+        # pollers can detect stalls; the final value is set when it ends.
+        reviews_count = self.reviews_count
+        if reviews_count is None and self._scraper is not None:
+            reviews_count = getattr(self._scraper, "cards_seen", None)
         data = {
             "job_id": self.job_id,
             "status": self.status.value if isinstance(self.status, JobStatus) else self.status,
@@ -55,7 +60,7 @@ class ScrapingJob:
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "error_message": self.error_message,
-            "reviews_count": self.reviews_count,
+            "reviews_count": reviews_count,
             "images_count": self.images_count,
             "progress": self.progress,
             "place_id": self.place_id,
