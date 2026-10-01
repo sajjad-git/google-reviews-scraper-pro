@@ -681,16 +681,26 @@ async def list_reviews(
     limit: int = Query(50, ge=1, le=1000, description="Reviews per page"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     include_deleted: bool = Query(False, description="Include soft-deleted reviews"),
+    after: Optional[str] = Query(
+        None,
+        description="ISO date/datetime; only reviews whose review_date is on/after it "
+                    "(reviews with a missing or unparseable date are included)",
+    ),
     review_db=Depends(get_review_db),
 ):
-    """Get paginated reviews for a place."""
+    """Get paginated reviews for a place.
+
+    Without `after` this is everything stored for the place, across all
+    scrape sessions — POST /scrape's date_filter only limits what a session
+    collects, not what this endpoint returns.
+    """
     place = review_db.get_place(place_id)
     if not place:
         raise HTTPException(status_code=404, detail="Place not found")
 
-    total = review_db.count_reviews(place_id, include_deleted=include_deleted)
+    total = review_db.count_reviews(place_id, include_deleted=include_deleted, after=after)
     rows = review_db.get_reviews(place_id, limit=limit, offset=offset,
-                                  include_deleted=include_deleted)
+                                  include_deleted=include_deleted, after=after)
     reviews = [ReviewResponse(**_clean_review(r)) for r in rows]
     return PaginatedReviewsResponse(
         place_id=place_id, total=total, limit=limit, offset=offset, reviews=reviews,

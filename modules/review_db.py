@@ -306,22 +306,39 @@ class ReviewDB:
             return self._deserialize_review(row)
         return None
 
-    def count_reviews(self, place_id: str, include_deleted: bool = False) -> int:
+    # Reviews on/after an ISO date. Mirrors date_filter's
+    # on_unparseable_date="include": a review whose date is missing or
+    # cannot be parsed is kept, never silently dropped.
+    _AFTER_CLAUSE = (
+        " AND (review_date IS NULL OR datetime(review_date) IS NULL"
+        " OR datetime(review_date) >= datetime(?))"
+    )
+
+    def count_reviews(self, place_id: str, include_deleted: bool = False,
+                      after: str = None) -> int:
         """Count reviews for a place (used for pagination totals)."""
         sql = "SELECT COUNT(*) as cnt FROM reviews WHERE place_id = ?"
         params: list = [place_id]
         if not include_deleted:
             sql += " AND is_deleted = 0"
+        if after:
+            sql += self._AFTER_CLAUSE
+            params.append(after)
         row = self.backend.fetchone(sql, tuple(params))
         return row["cnt"] if row else 0
 
     def get_reviews(self, place_id: str, limit: int = None,
-                    offset: int = 0, include_deleted: bool = False) -> List[Dict[str, Any]]:
-        """Get reviews for a place with pagination."""
+                    offset: int = 0, include_deleted: bool = False,
+                    after: str = None) -> List[Dict[str, Any]]:
+        """Get reviews for a place with pagination, optionally only those
+        whose review_date is on/after `after` (ISO date/datetime)."""
         sql = "SELECT * FROM reviews WHERE place_id = ?"
         params: list = [place_id]
         if not include_deleted:
             sql += " AND is_deleted = 0"
+        if after:
+            sql += self._AFTER_CLAUSE
+            params.append(after)
         sql += " ORDER BY created_date DESC"
         if limit:
             sql += " LIMIT ? OFFSET ?"
