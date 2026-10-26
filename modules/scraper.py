@@ -38,6 +38,7 @@ from modules.pipeline import PostScrapeRunner
 from modules.review_db import ReviewDB
 from modules.place_id import extract_place_id
 from modules.selector_health import SelectorHealth
+from modules.card_extract import extract_batch
 
 # Logger
 log = logging.getLogger("scraper")

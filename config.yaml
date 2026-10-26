@@ -11,6 +11,8 @@ api:
   allowed_origins: "*"          # Comma-separated CORS origins (env var ALLOWED_ORIGINS takes precedence)
   # API keys are managed via SQLite: python start.py api-key-create "my-key"
 
+browser_profile_dir: "./chrome-profile"
+
 # -----------------------------------------------------------------------------
 # Scraper
 # -----------------------------------------------------------------------------
