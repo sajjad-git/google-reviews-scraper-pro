@@ -13,6 +13,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from modules.browser_profile import is_auth_cookie
 from modules.s3_handler import S3Handler
 
 # Logger
@@ -29,6 +30,10 @@ _ALLOWED_IMAGE_HOSTS = (
 
 # Characters considered safe in filenames after normalization.
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
+
+# Characters Windows rejects in a directory name. Every place id format
+# contains ':' (0x..:0x.., cid:, short:, hash:).
+_UNSAFE_DIR_CHARS = re.compile(r'[:*?"<>|/\\]')
 
 
 def _is_allowed_image_host(url: str) -> bool:
@@ -60,6 +65,37 @@ def _sanitize_filename(name: str) -> str:
     if not name:
         name = "image"
     return name[:200]
+
+
+def _dir_name(place_id: str) -> str:
+    return _UNSAFE_DIR_CHARS.sub("_", place_id).strip(". ") or "unknown_place"
+
+
+def place_image_dir(image_dir: Path, place_id: str, previous_ids: Tuple[str, ...] = ()) -> Path:
+    """
+    Per-place image folder with a name that is valid on every OS.
+
+    Older versions named the folder after the raw place id, which only works
+    on macOS/Linux, and stored hex ids cut short ("0x…:0"). A folder under any
+    of those names (pass the old id in `previous_ids`) is renamed once so
+    existing images are kept. Only direct children of `image_dir` are
+    touched: cid/short ids come from the URL and may contain "../".
+    """
+    base = image_dir / _dir_name(place_id)
+    if base.exists():
+        return base
+    for old_id in (place_id, *previous_ids):
+        for legacy in (image_dir / old_id, image_dir / _dir_name(old_id)):
+            if (legacy != base and legacy.is_dir()
+                    and legacy.resolve().parent == image_dir.resolve()):
+                try:
+                    legacy.rename(base)
+                    log.info("Renamed image folder %s -> %s", legacy, base)
+                except OSError as e:
+                    log.warning("Could not rename image folder %s: %s", legacy, e)
+                    return legacy
+                return base
+    return base
 
 
 class ImageHandler:
@@ -119,6 +155,10 @@ class ImageHandler:
         # wall of identical errors is noise. We aggregate and log a summary.
         self._forbidden_count = 0
 
+        # Images on disk (downloaded now or earlier) after the last
+        # download_all_images() call.
+        self.last_image_count = 0
+
         # Initialize S3 handler
         self.s3_handler = S3Handler(config)
         self.use_s3 = config.get("use_s3", False)
@@ -131,11 +171,14 @@ class ImageHandler:
 
         Called by the scraper after navigation completes. Without these
         cookies, newer googleusercontent tokens (ABOP9p... prefix) return
-        403 for all downloads.
+        403 for all downloads. Google sign-in cookies (from a signed-in
+        browser profile) are never forwarded.
         """
         if not cookies:
             return
         for c in cookies:
+            if is_auth_cookie(c.get("name", "")):
+                continue
             try:
                 self._session.cookies.set(
                     c["name"], c["value"],
@@ -150,7 +193,7 @@ class ImageHandler:
     def set_place_id(self, place_id: str):
         """Set place ID to organize images into per-business subdirectories."""
         self._place_id = place_id
-        base = self.image_dir / place_id
+        base = place_image_dir(self.image_dir, place_id)
         self.profile_dir = base / "profiles"
         self.review_dir = base / "reviews"
 
@@ -325,6 +368,7 @@ class ImageHandler:
 
         if not download_tasks:
             log.info("No images to download")
+            self.last_image_count = 0
             return reviews
 
         log.info(
@@ -345,6 +389,8 @@ class ImageHandler:
                     url_to_custom_url[orig_url] = custom_url
                 if dl_url != orig_url:
                     url_to_download_url[orig_url] = dl_url
+
+        self.last_image_count = len(url_to_filename)
 
         # Upload to S3 if enabled
         s3_url_mapping = {}
