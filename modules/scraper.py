@@ -7,6 +7,7 @@ import logging
 import os
 import platform
 import re
+import random
 import threading
 import time
 import traceback
@@ -42,6 +43,10 @@ from modules.card_extract import extract_batch
 
 # Logger
 log = logging.getLogger("scraper")
+
+def _sleep(base: float, jitter: float = 0.3) -> None:
+    """Sleep base ± jitter%, so pauses aren't metronomic."""
+    time.sleep(base * random.uniform(1 - jitter, 1 + jitter))
 
 # Extra Chrome flags, passed to every Driver() call via chromium_arg.
 #   --disable-3d-apis              Maps' WebGL map otherwise renders in
@@ -1627,7 +1632,7 @@ class GoogleReviewsScraper:
 
             # Extra wait after clicking reviews tab to ensure page loads
             log.info("Waiting for reviews page to fully load...")
-            time.sleep(3)
+            _sleep(3)
 
             # Wait for page to be fully interactive
             try:
@@ -1660,7 +1665,7 @@ class GoogleReviewsScraper:
 
             # Add a longer wait after setting sort to allow results to load
             log.info("Waiting for reviews to render...")
-            time.sleep(3)
+            _sleep(3)
 
             # Use try-except to handle cases where the pane is not found
             # Try multiple selectors for the reviews pane
@@ -1773,9 +1778,9 @@ class GoogleReviewsScraper:
                         attempts += 1
                         # Try aggressive scrolling
                         driver.execute_script(scroll_script)
-                        time.sleep(1)
+                        _sleep(1)
                         driver.execute_script("window.scrollBy(0, 1000);")  # Extra scroll
-                        time.sleep(1.5)
+                        _sleep(1.5)
                         continue
                     else:
                         consecutive_no_cards = 0  # Reset counter when we find cards
@@ -1916,9 +1921,9 @@ class GoogleReviewsScraper:
                         try:
                             # Try multiple scroll methods
                             driver.execute_script(scroll_script)
-                            time.sleep(0.5)
+                            _sleep(0.5)
                             driver.execute_script("window.scrollBy(0, 500);")  # Extra scroll
-                            time.sleep(0.5)
+                            _sleep(0.5)
                         except Exception as e:
                             log.warning(f"Error scrolling: {e}")
                     else:
@@ -1962,7 +1967,7 @@ class GoogleReviewsScraper:
                         sleep_time = 2.0  # Wait longer when finding nothing (let page load)
                     else:
                         sleep_time = 1.0
-                    time.sleep(sleep_time)
+                    _sleep(sleep_time)
 
                 except StaleElementReferenceException:
                     # The pane or other element went stale, try to re-find
@@ -1976,7 +1981,7 @@ class GoogleReviewsScraper:
                 except Exception as e:
                     log.warning(f"Error during review processing: {e}")
                     attempts += 1
-                    time.sleep(1)
+                    _sleep(1)
 
             progress.stop()
 
