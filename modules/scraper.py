@@ -924,6 +924,37 @@ class GoogleReviewsScraper:
             return False
 
     @staticmethod
+    def _collect_fresh_cards(cards: List[WebElement], processed_ids: set, seen: set,
+                             max_reviews: int) -> tuple:
+        """
+        Register this batch's cards in `processed_ids` and return
+        (cards not stored yet, number of cards already stored).
+
+        With max_reviews > 0 it stops once that many reviews were looked at in
+        this run, stored ones included ("check the newest N").
+        """
+        fresh: List[WebElement] = []
+        already_stored = 0
+        for c in cards:
+            if max_reviews > 0 and len(processed_ids) >= max_reviews:
+                break
+            try:
+                cid = c.get_attribute("data-review-id")
+            except StaleElementReferenceException:
+                continue
+            except Exception as e:
+                log.debug(f"Error getting review ID: {e}")
+                continue
+            if not cid or cid in processed_ids:
+                continue
+            processed_ids.add(cid)
+            if cid in seen:
+                already_stored += 1
+            else:
+                fresh.append(c)
+        return fresh, already_stored
+
+    @staticmethod
     def _session_status(limited: bool, looked_at: int, total_found: int,
                         parse_errors: int) -> str:
         """

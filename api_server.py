@@ -11,7 +11,8 @@ import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Annotated
+
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Depends, Security, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
@@ -706,11 +707,7 @@ async def list_reviews(
     limit: int = Query(50, ge=1, le=1000, description="Reviews per page"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     include_deleted: bool = Query(False, description="Include soft-deleted reviews"),
-    after: Optional[str] = Query(
-        None,
-        description="ISO date/datetime; only reviews whose review_date is on/after it "
-                    "(reviews with a missing or unparseable date are included)",
-    ),
+        after: Optional[str] = None,  # ISO date/datetime; only reviews on/after it (missing/unparseable dates included)
     review_db=Depends(get_review_db),
 ):
     """Get paginated reviews for a place.
